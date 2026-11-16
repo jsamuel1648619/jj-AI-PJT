@@ -1,0 +1,46 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python environments and caches
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+
+# Private numbered documents; Django migration source files are required code
+00*
+!debugdna/migrations/00*.py
+!growthplan/migrations/00*.py
+!skillradar/migrations/00*.py
+
+# Session/user databases, vector stores and model weights
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+chroma_store/
+*.gguf
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.bin
+
+# Generated output and local tooling
+build/
+dist/
+*.log
+.playwright-mcp/
+.DS_Store
+Thumbs.db

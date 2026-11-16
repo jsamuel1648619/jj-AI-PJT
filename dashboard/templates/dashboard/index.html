@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}DevDNA · 성장 대시보드{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{% static 'skillradar/radar.css' %}"><link rel="stylesheet" href="{% static 'dashboard/dashboard.css' %}">{% endblock %}
+{% block extra_head %}<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js" defer></script><script src="{% static 'growthplan/progress.js' %}" defer></script><script src="{% static 'dashboard/dashboard.js' %}" defer></script>{% endblock %}
+{% block content %}
+<div hidden>{% csrf_token %}</div>
+<nav class="app-nav" aria-label="서비스"><a href="/" aria-current="page">DevDNA</a><div><a href="/skillradar/">SkillRadar</a><a href="/growthplan/">GrowthPlan</a><a href="/debugdna/">DebugDNA</a></div></nav>
+<header><p class="eyebrow">나의 진단 · 실수 · 다음 학습</p><h1>성장 대시보드</h1><p>저장한 기록을 바탕으로, 오늘 이어갈 학습을 확인하세요.</p></header>
+<div class="dashboard-toolbar"><label>확인할 학습 계획<select id="roadmap-select" disabled><option value="">불러오는 중…</option></select></label><button id="refresh" class="secondary" type="button">새로고침</button></div>
+<p id="sync-status" class="status" role="status" aria-live="polite">학습 기록을 불러오고 있습니다…</p><p id="task-status" class="status" role="status" aria-live="polite"></p>
+<div id="dashboard-content" aria-busy="true">
+<section class="pane goal"><div><p class="eyebrow">목표 직무</p><h2 id="target-title">저장된 목표 확인 중</h2><p id="target-detail"></p><p id="target-source"></p></div><a class="feature-link" href="/skillradar/">직무 분석·진단 시작 →</a></section>
+<div class="metrics dashboard-metrics"><div class="metric"><strong id="diagnosis-count">—</strong>완료한 역량 진단</div><div class="metric"><strong id="analysis-count">—</strong>분석한 코드 쌍</div><div class="metric"><strong id="progress-percent">—</strong>과제 달성률</div><div class="metric"><strong id="pending-count">—</strong>남은 학습 과제</div></div>
+<div class="dashboard-grid"><section class="pane"><h2>나의 역량 점수</h2><p id="diagnosis-context"></p><div class="chart" id="score-chart-wrap" hidden><canvas id="scores-chart" role="img" aria-label="역량 진단 점수와 직무 요구 수준 레이더 차트"></canvas></div><p id="scores-empty"></p><details id="scores-details" hidden><summary>점수 표로 확인</summary><div class="table-wrap"><table><thead><tr><th>역량</th><th>진단 점수</th><th>요구 수준</th></tr></thead><tbody id="scores-table"></tbody></table></div></details><a id="diagnosis-link" href="/skillradar/">진단 결과 확인 →</a></section>
+<section class="pane"><h2>반복 실수 빈도</h2><div class="chart" id="mistake-chart-wrap" hidden><canvas id="mistakes-chart" role="img" aria-label="실수 유형별 오류가 관찰된 코드 쌍 수"></canvas></div><p id="mistakes-empty"></p><ul id="mistakes-list"></ul><p class="hint">같은 코드 쌍·유형의 재분석은 중복 계산하지 않습니다.</p><a href="/debugdna/">코드 분석·힌트 보기 →</a></section></div>
+<section class="pane"><div class="section-heading"><h2>학습 달성률</h2><a id="plan-link" href="/growthplan/">GrowthPlan에서 이어가기 →</a></div><progress id="learning-progress" value="0" max="100" aria-label="선택한 계획의 과제 완료율" hidden></progress><p id="progress-detail"></p><p class="hint">선택한 계획의 주차별 실습 과제 기준입니다. 완료 체크는 수행 기록이며 역량 점수는 진단으로 다시 확인합니다.</p></section>
+<section class="pane"><h2>우선 학습 과제</h2><p class="hint">계획에 저장된 역량 우선순위에 따라 각 역량의 다음 미완료 과제를 보여줍니다.</p><div id="priority-tasks"></div><details id="all-tasks" hidden><summary>전체 과제 · 완료 및 취소</summary><div id="task-list"></div></details></section>
+<section class="pane"><h2>최근 코드 분석</h2><div id="recent-analyses"></div></section>
+<div class="feature-grid"><a href="/skillradar/"><strong>SkillRadar</strong><span>채용공고 분석과 답변 기반 역량 진단</span></a><a href="/growthplan/"><strong>GrowthPlan</strong><span>학습 과제와 완료 기록 관리</span></a><a href="/debugdna/"><strong>DebugDNA</strong><span>오류 원인과 반복 실수 확인</span></a></div>
+</div>
+{% endblock %}

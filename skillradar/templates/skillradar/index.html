@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% load static %}
+
+{% block title %}SkillRadar · 나의 직무 성장 계획{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'skillradar/radar.css' %}">
+{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js" defer></script>
+<script src="{% static 'skillradar/radar.js' %}" defer></script>
+{% endblock %}
+
+{% block content %}
+<nav class="app-nav" aria-label="서비스"><a href="/">DevDNA 대시보드</a><a href="/debugdna/">DebugDNA</a><a href="/growthplan/">저장한 성장 계획</a></nav>
+<header><p class="eyebrow">목표 직무에서 나의 다음 단계까지</p><h1>SkillRadar</h1><p>지원하고 싶은 직무를 찾으세요.<br>필요한 역량을 분석하고, 나에게 맞는 성장 계획으로 이어드립니다.</p></header>
+<nav aria-label="진행 단계"><ol class="steps">
+<li><button type="button" data-step="1" aria-current="step"><span class="step-number">1</span><span>직무 찾기<small id="step-status-1">진행 중</small></span></button></li>
+<li><button type="button" data-step="2" disabled><span class="step-number">2</span><span>직무 분석<small id="step-status-2">대기</small></span></button></li>
+<li><button type="button" data-step="3" disabled><span class="step-number">3</span><span>나의 역량<small id="step-status-3">대기</small></span></button></li>
+<li><button type="button" data-step="4" disabled><span class="step-number">4</span><span>성장 계획<small id="step-status-4">대기</small></span></button></li>
+</ol></nav>
+<p id="workflow-status" class="workflow-status" role="status" aria-live="polite">기업과 직무를 입력하면 시작할 수 있습니다.</p>
+<section id="step-1" class="pane" aria-labelledby="heading-1">
+<h2 id="heading-1" tabindex="-1">어떤 직무로 성장하고 싶나요?</h2><p>기업명과 직무명만 입력하세요. 사업부를 알고 있다면 함께 적어 주세요.</p>
+<fieldset class="controls"><legend class="sr-only">채용정보 찾기</legend>
+<form id="collect-form">{% csrf_token %}<div class="grid"><label>기업명<input id="company" maxlength="100" required autocomplete="organization" placeholder="지원하고 싶은 기업"></label><label>사업부 <span class="optional">선택</span><input id="division" maxlength="100" placeholder="예: 플랫폼 사업부"></label><label>직무명<input id="role" maxlength="100" required placeholder="예: 백엔드 개발자"></label></div><button id="collect" type="submit">채용공고 찾기</button></form>
+<div id="candidates" aria-label="검색된 채용공고"></div>
+<details id="manual-options"><summary>공고 URL이 있거나 직접 입력하고 싶어요</summary><div class="fallback">
+<form id="url-form"><label>채용공고 URL<input id="job-url" type="url" maxlength="2000" required placeholder="https://..."></label><button id="collect-url" type="submit" class="secondary">이 URL로 분석하기</button></form>
+<form id="manual-form"><label>채용공고 본문<textarea id="posting" rows="8" maxlength="30000" required placeholder="자동 수집이 어려운 경우 본문을 붙여 넣으세요."></textarea></label><label>출처 URL <span class="optional">선택</span><input id="source-url" type="url" maxlength="2000"></label><button id="manual-start" type="submit" class="secondary">입력한 공고 분석하기</button></form>
+</div></details><details><summary>이전 진단 결과 불러오기</summary><button id="load-history" type="button" class="secondary">저장된 진단 확인</button><div id="diagnosis-history"></div></details></fieldset><p id="collection-status" class="status" role="status" aria-live="polite"></p></section>
+<section id="step-2" class="pane" aria-labelledby="heading-2" hidden>
+<h2 id="heading-2" tabindex="-1">이 직무에 필요한 역량입니다</h2><p id="job-context"></p><p id="provenance"></p>
+<details id="posting-details"><summary>수집된 공고와 출처 확인</summary><a id="source-link" target="_blank" rel="noopener noreferrer" hidden>공고 원문 열기</a><pre id="posting-preview"></pre></details>
+<p id="analysis-status" class="status" role="status" aria-live="polite"></p><div id="analysis-summary" class="metrics"></div><div id="requirements"></div>
+<fieldset class="controls actions"><legend class="sr-only">분석 다음 단계</legend><button type="button" id="analysis-back" class="secondary">공고 다시 찾기</button><button id="analyze" type="button" class="secondary" hidden>분석 다시 시도</button><button id="to-assessment" type="button" hidden>나의 역량 평가하기 →</button></fieldset></section>
+<section id="step-3" class="pane" aria-labelledby="heading-3" hidden>
+<h2 id="heading-3" tabindex="-1">직무에 맞춘 질문으로 역량을 진단해요</h2><p>질문에 해결 과정이나 경험을 답하면 AI가 역량별 기준에 따라 평가합니다. 모르면 모르겠다고 답해도 됩니다. 비운 답변은 미평가로 남습니다.</p><p class="hint">질문·답변·평가 결과는 이 브라우저에서 다시 확인할 수 있도록 저장합니다. 답변을 바꿔 평가하면 별도 진단 기록이 만들어집니다.</p>
+<p id="question-status" class="status" role="status" aria-live="polite"></p><fieldset class="controls"><button id="retry-questions" type="button" class="secondary" hidden>진단 질문 생성 이어하기</button></fieldset>
+<form id="evaluation-form"><fieldset class="controls"><legend class="sr-only">진단 질문 답변</legend><div id="skill-inputs"></div><div class="actions"><button type="button" id="assessment-back" class="secondary">← 직무 분석</button><button id="evaluate" type="submit" hidden>답변 평가하고 학습 순서 확인</button></div></fieldset></form>
+<p id="evaluation-status" class="status" role="status" aria-live="polite"></p><p id="debug-context" class="hint"></p>
+<div id="result" hidden><hr><h3>나의 역량과 목표 직무 비교</h3><p id="summary"></p><div class="charts"><div class="chart"><canvas id="radar" role="img" aria-label="요구 숙련도와 자기평가 레이더 차트"></canvas></div><div class="chart"><canvas id="gaps" role="img" aria-label="역량 격차 막대그래프"></canvas></div></div><p id="chart-status"></p>
+<details><summary>역량별 비교 자세히 보기</summary><div class="table-wrap"><table><thead><tr><th>역량</th><th>구분</th><th>요구 / 진단 점수</th><th>격차 / 순위</th></tr></thead><tbody id="comparison"></tbody></table></div></details><p id="insufficient"></p><p id="priorities"></p><div id="evaluation-reasons"></div><p class="hint">진단 점수는 제출한 답변에서 확인한 이해 수준입니다. 실제 실무 능력이나 채용 적합도를 보장하지 않으며, 근거를 확인하고 실습으로 재검증하세요.</p><fieldset class="controls actions"><legend class="sr-only">성장 계획으로 이동</legend><button id="plan" type="button">진단 결과로 성장 계획 만들기 →</button></fieldset></div></section>
+<section id="step-4" class="pane" aria-labelledby="heading-4" hidden>
+<h2 id="heading-4" tabindex="-1">이제, 나만의 성장 계획을 만들어요</h2><p id="plan-context"></p>
+<form id="roadmap-form"><fieldset class="controls"><legend class="sr-only">학습 계획 설정</legend><div id="unknown-targets"></div><details id="plan-options"><summary>학습 시간·목표 조정 <span id="plan-defaults" class="optional">4주 · 주 5시간</span></summary><div class="grid"><label>학습 기간 (주)<input id="plan-weeks" type="number" min="1" max="12" value="4" required></label><label>주당 학습 시간<input id="plan-hours" type="number" min="1" max="40" value="5" required></label></div><label>특히 연습하고 싶은 점 <span class="optional">선택</span><textarea id="plan-notes" rows="2" maxlength="5000" placeholder="예: 경계값 처리, SQL JOIN"></textarea></label><div id="known-targets"></div></details>
+<div class="actions"><button id="plan-back" type="button" class="secondary">← 역량 평가</button><button id="generate" type="submit">맞춤 성장 계획 생성</button></div></fieldset></form>
+<p id="plan-status" class="status" role="status" aria-live="polite"></p><div id="roadmap" hidden><hr><h3>나의 GrowthPlan</h3><p id="roadmap-summary"></p><p id="debug-plan-context"></p><p id="deferred"></p><div id="schedule"></div><fieldset class="controls actions"><legend class="sr-only">성장 계획 관리</legend><button id="manage-plan" type="button">GrowthPlan에서 저장·진행 관리</button></fieldset><p class="hint">계획은 학습 가이드입니다. 실습 후 현재 수준을 다시 평가해 조정하세요.</p></div></section>
+{% endblock %}

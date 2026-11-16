@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - BASE_URL=${BASE_URL}
+      - GMS_KEY=${GMS_KEY}
+      - API_MODEL=${API_MODEL}
+    volumes:
+      - ./.env:/app/.env
+    restart: always

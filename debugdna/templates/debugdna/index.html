@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}DebugDNA · 나의 실수에서 성장하기{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'skillradar/radar.css' %}">
+<style>.code-grid{grid-template-columns:1fr 1fr}.code-grid textarea{font:14px/1.6 monospace}.evidence{background:#0e1623;padding:14px;border-radius:8px}.hints li{margin:16px 0;color:#c5d5e7;line-height:1.7}input[type=checkbox]{display:inline-block;width:auto}#findings h3{margin-top:0}@media(max-width:700px){.code-grid{grid-template-columns:1fr}}</style>
+{% endblock %}
+{% block extra_head %}<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js" defer></script><script src="{% static 'debugdna/debug.js' %}" defer></script>{% endblock %}
+{% block content %}
+<nav class="app-nav"><a href="/">DevDNA 대시보드</a><a href="/skillradar/">SkillRadar · 직무 역량 진단</a><a href="/growthplan/">GrowthPlan · 성장 계획</a></nav>
+<header><p class="eyebrow">나의 실수에서 다음 학습으로</p><h1>DebugDNA</h1><p>틀린 코드와 수정한 코드를 비교하고, 오류 원인과 반복되는 실수를 확인하세요.</p></header>
+<section class="pane"><h2>Python 코드 비교</h2><form id="analysis-form">{% csrf_token %}<fieldset id="analysis-controls" class="controls"><legend class="sr-only">분석할 코드</legend><div class="grid code-grid">
+<label>오답 코드<textarea id="original" rows="12" maxlength="30000" required spellcheck="false" placeholder="들여쓰기를 포함해 원문 그대로 입력하세요."></textarea></label>
+<label>수정 코드<textarea id="corrected" rows="12" maxlength="30000" required spellcheck="false"></textarea></label></div>
+<details><summary>학습 역량·메모 추가 <span class="optional">선택</span></summary><label>관련 학습 역량<input id="related-skills" maxlength="900" list="skill-options" placeholder="예: Python, Django (쉼표로 구분, 최대 10개)"></label><datalist id="skill-options"></datalist><p class="hint">비워 두면 Python과 같은 세션의 최근 SkillRadar 진단 역량을 참고해 관련 역량을 분류합니다.</p><label>학습 메모<textarea id="notes" rows="2" maxlength="5000"></textarea></label><label><input id="use-llm" type="checkbox" checked> AI 오류 원인·실수 유형 분석 사용</label></details>
+<button id="submit" type="submit">오류 분석하고 기록하기</button></fieldset><p id="status" class="status" role="status" aria-live="polite"></p></form><p class="hint">코드를 실행하지 않습니다. AI 분석도 수정 코드의 정답을 보장하지 않습니다. 코드·메모·분석 결과는 같은 브라우저의 기록으로 저장됩니다.</p></section>
+<section id="result" class="pane" hidden><h2>분석 결과</h2><p id="summary"></p><p id="syntax"></p><div id="findings"></div><h3>단계별 힌트</h3><ol id="hints" class="hints"></ol><button id="next-hint" type="button" class="secondary">첫 번째 힌트 보기</button><details><summary>변경점·AST 구조 보기</summary><pre id="diff"></pre><pre id="ast"></pre></details><p><a id="diagnosis-link" href="/skillradar/">SkillRadar 진단과 성장 계획에 연결 →</a></p></section>
+<section class="pane"><h2>반복 실수와 취약 역량</h2><p id="insight-summary"></p><p class="hint">빈도는 오류가 관찰된 서로 다른 코드 쌍의 수입니다. 같은 코드 쌍을 재분석하거나 유형이 중복돼도 횟수를 늘리지 않습니다.</p><div class="charts"><div class="chart"><canvas id="categories" role="img" aria-label="실수 유형별 빈도"></canvas></div><div class="chart"><canvas id="trend" role="img" aria-label="분석 기록별 발견 실수 유형 수"></canvas></div></div><p id="chart-status"></p><div id="weak-skills"></div></section>
+<section class="pane"><h2>저장한 분석 기록</h2><p class="hint">이 브라우저 세션의 최근 30개 기록입니다. 쿠키·세션이 사라지면 기존 기록에 접근할 수 없습니다.</p><button id="load-history" type="button" class="secondary">기록 새로고침</button><p id="history-status" class="status" role="status"></p><div id="history"></div></section>
+{% endblock %}
