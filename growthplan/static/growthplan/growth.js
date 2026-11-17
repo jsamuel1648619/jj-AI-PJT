@@ -26,8 +26,23 @@ function updateProgress() {
   el('progress').max = total || 1; el('progress').value = count;
   el('progress-text').textContent = total ? `${count} / ${total}주 완료 (${saved ? saved.percent : Math.round(count / total * 100)}%)` : '진행할 과제가 없습니다.';
 }
+function filterWeeks() {
+  const cards = Array.from(el('schedule').children);
+  cards.forEach(card => {card.hidden = el('incomplete-only').checked && card.classList.contains('done');});
+  el('schedule-empty').hidden = !cards.length || cards.some(card => !card.hidden);
+}
+el('incomplete-only').onchange = filterWeeks;
+el('next-week').onclick = () => {
+  const next = el('schedule').querySelector('.next');
+  if (next) {next.scrollIntoView({behavior: 'smooth', block: 'start'}); next.focus({preventScroll: true});}
+};
 function render() {
   const {plan} = active;
+  const linked = !!plan.diagnosis_attempt_id;
+  el('add').disabled = linked; el('example').disabled = linked;
+  document.querySelectorAll('.goal .name, .goal .current, .goal .importance, .goal .weight, .goal button').forEach(control => {control.disabled = linked;});
+  el('diagnosis-context').hidden = !linked;
+  if (linked) el('diagnosis-review').href = `/skillradar/?attempt=${encodeURIComponent(plan.diagnosis_attempt_id)}`;
   if (plan.roadmap_id) active.completed = completedWeeks(plan);
   el('result').hidden = false; el('storage-status').textContent = '';
   el('summary').textContent = `${plan.source === 'qwen' ? 'Qwen 맞춤 계획' : '기본 계획'} · ${plan.weeks.length}주 · 총 ${plan.total_hours}시간`;
@@ -36,19 +51,30 @@ function render() {
   el('met').textContent = plan.met_skills.length ? '현재 평가상 목표 이상: ' + plan.met_skills.join(', ') : '';
   el('schedule').replaceChildren();
   const tasks = new Map((plan.tasks || []).map(task => [task.week, task]));
+  const nextWeek = plan.weeks.find(week => !active.completed.includes(week.week));
   plan.weeks.forEach(week => {
     const task = tasks.get(week.week);
-    const card = document.createElement('article'); card.className = 'week';
-    const title = document.createElement('h3'); title.textContent = `${week.week}주차 · ${week.skill} · ${week.hours}시간`; card.append(title);
-    [['목표', week.objective], ['실습', week.exercise], ['완료 기준', week.completion], ['회고', week.review]].forEach(([label, value]) => {const p = document.createElement('p'); p.textContent = `${label}: ${value}`; card.append(p);});
+    const card = document.createElement('article'); card.className = 'week'; card.tabIndex = -1;
+    const title = document.createElement('h3'); title.textContent = `${week.week}주차 · ${week.skill} · ${week.hours}시간`; const heading = document.createElement('div'); heading.className = 'week-heading';
+    const state = document.createElement('span'); state.className = 'week-state';
+    heading.append(title, state); card.append(heading);
+    const content = document.createElement('dl'); content.className = 'week-content';
+    [['학습 목표', week.objective], ['실습 과제', week.exercise], ['완료 기준', week.completion], ['회고', week.review]].forEach(([label, value]) => {const item = document.createElement('div'), term = document.createElement('dt'), description = document.createElement('dd'); term.textContent = label; description.textContent = value; item.append(term, description); content.append(item);}); card.append(content);
     const label = document.createElement('label'), check = document.createElement('input');
     check.type = 'checkbox'; check.checked = task ? task.completed : active.completed.includes(week.week); check.disabled = !task || completionBusy;
     if (task) check.dataset.taskId = task.id;
     card.classList.toggle('done', check.checked);
+    card.classList.toggle('next', week === nextWeek);
+    state.textContent = check.checked ? '완료' : week === nextWeek ? '다음 학습' : '미완료';
+    check.setAttribute('aria-label', `${week.week}주차 ${week.skill} 실습 과제 완료`);
+    label.className = 'completion-control';
     check.onchange = () => completeTask(task, check.checked, check);
-    label.append(check, document.createTextNode(' 이 주차 실습 과제 완료 · 체크 해제로 취소')); card.append(label); el('schedule').append(card);
+    label.append(check, document.createTextNode(task ? '완료 기준을 충족했습니다 · 체크 해제로 완료 취소' : '계획을 다시 생성하면 완료 상태를 기록할 수 있습니다')); card.append(label); el('schedule').append(card);
   });
   updateProgress();
+  el('next-step').textContent = nextWeek ? `다음 학습: ${nextWeek.week}주차 · ${nextWeek.skill} (${nextWeek.hours}시간) — ${nextWeek.objective}` : plan.weeks.length ? '모든 주차를 완료했습니다. 회고를 정리하고 역량을 다시 진단해 보세요.' : '배정된 학습이 없습니다. 목표 역량과 학습 기간을 조정해 주세요.';
+  el('next-week').disabled = !nextWeek;
+  filterWeeks();
   el('storage-status').textContent = plan.roadmap_id ? '과제 완료·취소는 자동 저장되며 대시보드에 반영됩니다.' : '이전 기기 보관 초안입니다. 계획을 다시 생성하면 과제 완료를 관리할 수 있습니다.';
 }
 async function completeTask(task, completed, control) {
@@ -64,6 +90,9 @@ async function completeTask(task, completed, control) {
     if (active && active.plan.roadmap_id === roadmapId) {
       active.plan.tasks = active.plan.tasks.map(row => row.id === data.task.id ? data.task : row);
       active.plan.progress = data.progress; render();
+      const updatedControl = Array.from(document.querySelectorAll('.week input')).find(check => check.dataset.taskId === String(task.id));
+      if (updatedControl && !updatedControl.closest('.week').hidden) updatedControl.focus();
+      else el('next-week').focus();
       el('storage-status').textContent = completed ? '과제를 완료했습니다. 대시보드에도 반영했습니다.' : '완료를 취소했습니다. 대시보드에도 반영했습니다.';
     }
   } catch (error) {
@@ -112,17 +141,19 @@ async function listPlans() {
 }
 el('open-plan').onclick = () => {if (el('stored-plans').value) openRoadmap(el('stored-plans').value);};
 el('plan-form').onsubmit = async event => {
-  event.preventDefault(); if (completionBusy) return;
+  event.preventDefault(); if (completionBusy || el('submit').disabled) return;
   el('submit').disabled = true; el('example').disabled = true; el('result').hidden = true; el('status').textContent = '성장 계획을 만들고 있습니다…';
   const input = {skills: Array.from(el('goals').children).map(row => ({name: row.querySelector('.name').value, current_level: row.querySelector('.current').value === '' ? null : Number(row.querySelector('.current').value), target_level: Number(row.querySelector('.target').value), importance: row.querySelector('.importance').value, weight: Number(row.querySelector('.weight').value), required_level: row.dataset.requiredLevel === '' ? null : Number(row.dataset.requiredLevel), level_basis: row.dataset.levelBasis, experience: row.dataset.experience})), weeks: Number(el('weeks').value), hours_per_week: Number(el('hours').value), weaknesses: el('weaknesses').value, use_llm: el('mode').value === 'qwen'};
   try {
-    const response = await fetch('/api/growthplan/generate/', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value}, body: JSON.stringify(input)});
+    const linked = active && active.plan.diagnosis_attempt_id;
+    const body = linked ? {attempt_id: linked, targets: active.plan.diagnosis_skills.map(skill => ({skill_id: skill.skill_id, level: input.skills.find(goal => goal.name === skill.name).target_level})), weeks: input.weeks, hours_per_week: input.hours_per_week, weaknesses: input.weaknesses, use_llm: input.use_llm} : input;
+    const response = await fetch(linked ? '/api/growthplan/from-diagnosis/' : '/api/growthplan/generate/', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value}, body: JSON.stringify(body)});
     const plan = await response.json(); if (!response.ok) throw new Error(plan.error || '계획 생성에 실패했습니다.');
     activationVersion++; active = {version: 1, input: plan.configuration, plan, completed: completedWeeks(plan)}; render();
     const url = new URL(window.location.href); url.searchParams.set('roadmap', plan.roadmap_id); history.replaceState(null, '', url);
     progressStore.publish(plan.roadmap_id); listPlans(); el('status').textContent = '계획과 학습 과제를 저장했습니다.';
   } catch (error) {el('status').textContent = error.message;}
-  finally {el('submit').disabled = false; el('example').disabled = false;}
+  finally {el('submit').disabled = false; el('example').disabled = !!(active && active.plan.diagnosis_attempt_id);}
 };
 el('save').onclick = () => {if (!active) return; try {localStorage.setItem(key, JSON.stringify(active)); el('storage-status').textContent = '이 기기에 백업을 보관했습니다. 과제 완료 상태는 저장된 서버 기록을 우선합니다.';} catch {el('storage-status').textContent = '기기 보관을 사용할 수 없습니다. Markdown 다운로드로 보관하세요.';}};
 function validSaved(value) {

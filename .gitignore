@@ -44,3 +44,6 @@ dist/
 .playwright-mcp/
 .DS_Store
 Thumbs.db
+
+# Windows Explorer metadata
+desktop.ini

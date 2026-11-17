@@ -15,7 +15,7 @@ from django.test import TransactionTestCase
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select, WebDriverWait
 
-from .collection import CollectionFailure, browser, collect_posting, public_url
+from .collection import CollectionFailure, CollectionInput, browser, collect_posting, public_url
 from .test_pipeline import POSTING, requirements
 from .test_diagnosis import fake_qwen, question_fixture
 from .diagnosis import GradesOutput
@@ -47,7 +47,10 @@ class BrowserPipelineTests(TransactionTestCase):
 
         def fixture_app(environ, start_response):
             path = environ['PATH_INFO']
-            if path == '/fixture':
+            if path == '/fixture-hidden':
+                text = '<html><body><nav>UNRELATED NAVIGATION</nav><div id="main-content"><h1>Official role</h1><p>' + POSTING + '</p><div style="display:none"><h1>Hidden application</h1>' + 'HIDDEN QUESTION ' * 4000 + '</div><form>APPLICATION FORM</form></div></body></html>'
+                body, content_type = text.encode(), 'text/html; charset=utf-8'
+            elif path == '/fixture':
                 text = '<!doctype html><html lang="ko"><title>테스트 채용공고</title><body><main><h1>백엔드 개발자</h1><p>' + POSTING.replace('\n', '</p><p>') + '</p></main></body></html>'
                 body, content_type = text.encode(), 'text/html; charset=utf-8'
             elif path == '/ollama/api/chat':
@@ -268,6 +271,27 @@ class BrowserPipelineTests(TransactionTestCase):
         self.driver.switch_to.window(dashboard_window)
         self.driver.close()
         self.driver.switch_to.window(growth_window)
+        # Regenerating in GrowthPlan must retain the original job and server scores.
+        original_plan = self.driver.execute_script("return new URL(location.href).searchParams.get('roadmap')")
+        self.assertFalse(self.driver.find_element(By.CSS_SELECTOR, '.goal .current').is_enabled())
+        self.assertFalse(self.find('add').is_enabled())
+        self.assertTrue(self.find('diagnosis-context').is_displayed())
+        self.find('hours').clear()
+        self.find('hours').send_keys('6')
+        self.flags['fail_plan'] = True
+        self.find('submit').click()
+        self.wait.until(lambda d: d.find_element(By.ID, 'submit').is_enabled())
+        self.assertIn('연결', self.find('status').text)
+        self.assertEqual(self.find('hours').get_attribute('value'), '6')
+        self.find('submit').click()
+        self.wait.until(lambda d: d.execute_script("return new URL(location.href).searchParams.get('roadmap')") != original_plan)
+        self.assertIn('총 24시간', self.find('summary').text)
+        self.assertTrue(self.find('example').get_attribute('disabled'))
+        dashboard = self.driver.execute_async_script("const done=arguments[0];fetch('/api/dashboard/').then(r=>r.json()).then(done);")
+        self.assertTrue(dashboard['diagnosis_matches_roadmap'])
+        self.assertEqual(dashboard['target_job']['company'], '테스트 기업')
+        self.assertEqual([item['score'] for item in dashboard['diagnosis']['scores']], [1, 2, 0])
+        self.assertTrue(dashboard['roadmap']['configuration']['skills'][0]['weak_points'])
         self.driver.get(self.base + '/skillradar/')
         self.find('load-history').find_element(By.XPATH, './ancestor::details/summary').click()
         self.find('load-history').click()
@@ -289,6 +313,16 @@ class BrowserPipelineTests(TransactionTestCase):
         self.assertEqual(self.driver.find_elements(By.CSS_SELECTOR, '#priority-tasks button'), [])
         self.assertIn('저장된 역량 진단 결과가 없습니다', self.find('scores-empty').text)
         self.assertLessEqual(self.driver.execute_script('return document.documentElement.scrollWidth'), 392)
+
+    def test_collection_ignores_hidden_application_and_navigation_in_main_content(self):
+        url = self.base + '/fixture-hidden'
+        with patch('skillradar.collection.public_url', side_effect=lambda value: value if value == url else public_url(value)):
+            data = collect_posting(CollectionInput(url=url))
+        self.assertIn('Official role', data['body'])
+        self.assertIn('Python', data['body'])
+        self.assertFalse(data['truncated'])
+        for hidden in ('HIDDEN QUESTION', 'Hidden application', 'UNRELATED NAVIGATION', 'APPLICATION FORM'):
+            self.assertNotIn(hidden, data['body'])
 
     def test_mobile_fallback_retries_unknown_targets_and_stale_results(self):
         self.driver.execute_cdp_cmd('Emulation.setDeviceMetricsOverride', {'width': 390, 'height': 844, 'deviceScaleFactor': 1, 'mobile': True})

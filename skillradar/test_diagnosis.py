@@ -7,7 +7,7 @@ from django.test import Client, TestCase
 from django.utils import timezone
 from pydantic import ValidationError
 
-from .diagnosis import DiagnosticQuestion, QuestionsOutput, GradesOutput, ask_qwen
+from .diagnosis import DiagnosticQuestion, QuestionsOutput, GradesOutput, ask_qwen, core_question
 from .models import Diagnosis, DiagnosisAttempt
 from .test_pipeline import POSTING, requirements
 from growthplan.models import DiagnosisRoadmap
@@ -82,6 +82,18 @@ class DiagnosisTests(TestCase):
         self.assertEqual(len(saved.diagnosis.questionnaire[0]['rubric']), 6)
         self.assertIn(saved.result['requirements'][0]['answer_evidence'][0], saved.responses[0]['answer'])
 
+    def test_fixed_core_rubric_is_independent_of_domain_scenario(self):
+        diagnosis = self.questions(self.create())
+        question = diagnosis['questions'][0]
+        self.assertIn('심화 참고 상황 (답변 선택', question['question'])
+        self.assertIn('익숙한 언어 하나', question['question'])
+        self.assertIn('자동 테스트·성능 측정은 필수가 아니다', question['rubric'][2]['description'])
+        self.complete(self.attempt(diagnosis))
+        grading = next(call for call in self.qwen.call_args_list if call.args[0] is GradesOutput)
+        self.assertNotIn('심화 참고 상황', grading.args[2]['questions'][0]['question'])
+        self.assertEqual(set(grading.args[2]['requirements'][0]), {'skill_id', 'name'})
+        self.assertEqual(core_question({'skill_id': 's1', 'name': 'Python'})['rubric'], question['rubric'])
+
     def test_batches_resume_and_completion_is_idempotent(self):
         diagnosis = self.create(count=4)
         url = f"/api/skillradar/diagnoses/{diagnosis['id']}/questions/"
@@ -105,6 +117,45 @@ class DiagnosisTests(TestCase):
         calls = self.qwen.call_count
         self.assertEqual(self.client.post(url, {}, content_type='application/json').json()['result'], result['result'])
         self.assertEqual(self.qwen.call_count, calls)
+
+    def test_advanced_grades_preserve_model_scores_and_concrete_evidence(self):
+        diagnosis = self.questions(self.create())
+        examples = [
+            (3, '프로젝트에서 API 구현을 맡아 검증 함수를 분리했습니다. 정상 요청과 실패 요청 24개에서 기대 응답을 확인했습니다.',
+             '자신의 API 구현 역할과 함수 분리 선택, 정상·실패 요청 검증으로 프로젝트 적용 기준을 충족합니다. 독립적인 원인 분석과 개선 전후 검증은 확인되지 않습니다.'),
+            (4, '혼자 쿼리 로그로 N+1 원인을 재현하고 일괄 조회를 선택했습니다. 같은 입력으로 변경 전 101회, 변경 후 2회 조회와 응답 일치를 확인했습니다. 복수 설계 비교는 하지 않았습니다.',
+             '독립적인 N+1 원인 분석과 일괄 조회 선택, 조회 횟수 전후 비교 및 응답 검증으로 4점을 충족합니다. 복수 설계의 측정 비교는 확인되지 않습니다.'),
+            (5, '캐시와 일괄 조회 설계를 같은 부하에서 비교했습니다. 지연은 20ms와 30ms, 메모리는 80MB와 40MB였습니다. 메모리 제한 때문에 일괄 조회를 선택해 최적화하고 회귀 검증을 추가해 재발을 방지했습니다.',
+             '두 설계의 지연·메모리 측정과 제약에 따른 선택·최적화, 회귀 검증을 통한 재발 방지로 5점 기준을 충족합니다.'),
+        ]
+        responses = [{'skill_id': item['skill_id'], 'answer': example[1]}
+                     for item, example in zip(diagnosis['requirements'], examples)]
+        response = self.client.post(f"/api/skillradar/diagnoses/{diagnosis['id']}/attempts/",
+                                    {'responses': responses}, content_type='application/json')
+        self.assertEqual(response.status_code, 201)
+
+        def advanced_grades(schema, system, data):
+            self.assertIs(schema, GradesOutput)
+            self.assertEqual(data['responses'], responses)
+            self.assertIn('한 개선안의 전후 비교로 충분', system)
+            self.assertIn('재발 방지 또는 확장 설계', system)
+            self.assertIn('상위 수준 경험이 없다는 문장', system)
+            self.assertIn('행동과 검증 결과를 해당 수준의 기준에 연결', system)
+            self.assertEqual(set(data), {'questions', 'requirements', 'responses'})
+            self.assertIn('복수 설계 비교나 확장 설계는 필수가 아니다', data['questions'][0]['rubric'][4]['description'])
+            return GradesOutput.model_validate({'evaluations': [
+                {'skill_id': item['skill_id'], 'score': score, 'rationale': rationale,
+                 'evidence': [answer], 'weak_points': []}
+                for item, (score, answer, rationale) in zip(responses, examples)]})
+
+        self.qwen.side_effect = advanced_grades
+        result = self.complete(response.json())['result']
+        for item, (score, answer, rationale) in zip(result['requirements'], examples):
+            self.assertEqual(item['score'], score)
+            self.assertEqual(item['evaluation_reason'], rationale)
+            self.assertEqual(item['answer_evidence'], [answer])
+        saved = DiagnosisAttempt.objects.get(pk=result['attempt_id'])
+        self.assertEqual([item['score'] for item in saved.evaluations], [3, 4, 5])
 
     def test_blank_is_unassessed_not_zero_and_answer_edits_create_new_attempt(self):
         diagnosis = self.questions(self.create())
@@ -210,6 +261,31 @@ class DiagnosisTests(TestCase):
             DiagnosticQuestion.model_validate({**question, 'rubric': question['rubric'][:5]})
         with self.assertRaises(ValidationError):
             GradesOutput.model_validate({'evaluations': [{'skill_id': 's1', 'score': 6, 'rationale': '평가', 'evidence': ['답변'], 'weak_points': []}]})
+
+    @patch('skillradar.diagnosis.request.urlopen')
+    def test_later_batch_ids_and_counts_are_constrained_in_model_schema(self, response):
+        ids = ['s7', 's8']
+        response.return_value.__enter__.return_value.read.return_value = json.dumps({'message': {'content': json.dumps(question_fixture(ids))}}).encode()
+        ask_qwen(QuestionsOutput, 'system', {'requirements': [{'skill_id': identity} for identity in ids]})
+        schema = json.loads(response.call_args.args[0].data)['format']
+        self.assertEqual(schema['$defs']['DiagnosticQuestion']['properties']['skill_id']['enum'], ids)
+        self.assertEqual(schema['properties']['questions']['type'], 'object')
+        self.assertEqual(schema['properties']['questions']['required'], ids)
+        self.assertFalse(schema['properties']['questions']['additionalProperties'])
+        self.assertEqual(schema['properties']['questions']['properties']['s7']['required'], ['question'])
+        mapped = {question['skill_id']: {'question': question['question']}
+                  for question in question_fixture(ids)['questions']}
+        response.return_value.__enter__.return_value.read.return_value = json.dumps({'message': {'content': json.dumps({'questions': mapped})}}).encode()
+        result = ask_qwen(QuestionsOutput, 'system', {'requirements': [{'skill_id': identity} for identity in ids]})
+        first_payload = response.call_args.args[0].data
+        ask_qwen(QuestionsOutput, 'system', {'requirements': [{'skill_id': identity} for identity in ids]})
+        self.assertEqual(response.call_args.args[0].data, first_payload)
+        self.assertIsInstance(json.loads(first_payload)['options']['seed'], int)
+        self.assertEqual([item.skill_id for item in result.questions], ids)
+        mapped.pop('s8')
+        response.return_value.__enter__.return_value.read.return_value = json.dumps({'message': {'content': json.dumps({'questions': mapped})}}).encode()
+        with self.assertRaises(ValueError):
+            ask_qwen(QuestionsOutput, 'system', {'requirements': [{'skill_id': identity} for identity in ids]})
 
     @patch('skillradar.diagnosis.request.urlopen')
     def test_raw_model_response_schema_is_checked(self, response):

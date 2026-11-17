@@ -5,8 +5,8 @@ from django.test import SimpleTestCase, TestCase
 from pydantic import ValidationError
 from selenium.common.exceptions import TimeoutException
 
-from .analysis import EvaluationInput, Requirement, analyze_radar, normalize_model_requirement
-from .collection import CollectionFailure, CollectionInput, browser, collect_posting, public_url
+from .analysis import EvaluationInput, Requirement, RadarInput, extract_requirements, analyze_radar, normalize_model_requirement, source_importance, parse_extraction
+from .collection import CollectionFailure, CollectionInput, browser, collect_posting, public_url, search_links, source_matches
 
 
 POSTING = '필수 역량\nPython으로 API를 독립적으로 개발하고 문제를 해결합니다.\nDjango 프로젝트 활용 경험\n우대 사항\nDocker 기초 실습 경험'
@@ -84,6 +84,32 @@ class EvaluationPipelineTests(TestCase):
         self.assertEqual(normalize_model_requirement(literal).level_basis, 'explicit')
 
     @patch('skillradar.analysis.request.urlopen')
+    def test_section_evidence_corrects_model_importance(self, mocked):
+        posting = 'Role\nFirmware 개발\nRecommended Subject\n수치해석\nRequirements\nPython 기초 실습\nPluses\nISTQB 자격증'
+        extracted = [{'name': name, 'importance': 'required', 'evidence': evidence, 'weight': 5}
+                     for name, evidence in [('Firmware', 'Firmware 개발'), ('수치해석', '수치해석'),
+                                            ('Python', 'Python 기초 실습'), ('ISTQB', 'ISTQB 자격증')]]
+        mocked.return_value.__enter__.return_value.read.return_value = json.dumps({'message': {'content': json.dumps({'requirements': extracted})}}).encode()
+        data = analyze_radar(EvaluationInput(job_posting=posting, requirements=[], use_llm=True))
+        self.assertEqual([item['importance'] for item in data['requirements']], ['unspecified', 'unspecified', 'required', 'preferred'])
+        self.assertEqual([item['weight'] for item in data['requirements']], [3, 3, 5, 2])
+        self.assertEqual(data['summary']['required'], 1)
+        self.assertIsNone(source_importance('Requirements\nPython\nPluses\nPython', 'Python'))
+        self.assertIsNone(source_importance('Python 경험', 'Python 경험'))
+
+    def test_null_model_level_is_conservatively_unknown_without_relaxing_client_validation(self):
+        item = {**requirements()[0], 'required_level': None, 'level_basis': 'inferred'}
+        parsed = parse_extraction(json.dumps({'requirements': [item]})).requirements[0]
+        self.assertIsNone(parsed.required_level)
+        self.assertEqual((parsed.level_basis, parsed.level_reason, parsed.level_evidence), ('unknown', '', ''))
+        with self.assertRaises(ValidationError):
+            Requirement(**item)
+        with self.assertRaises(ValidationError):
+            parse_extraction(json.dumps({'requirements': [{**item, 'required_level': 9}]}))
+        with self.assertRaises(ValidationError):
+            parse_extraction(json.dumps({'requirements': [{**item, 'level_basis': 'invalid'}]}))
+
+    @patch('skillradar.analysis.request.urlopen')
     def test_qwen_schema_contains_levels_and_rejects_false_evidence(self, mocked):
         mocked.return_value.__enter__.return_value.read.return_value = json.dumps({'message': {'content': json.dumps({'requirements': requirements()})}}).encode()
         payload = {'job_posting': POSTING, 'use_llm': True}
@@ -91,6 +117,10 @@ class EvaluationPipelineTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['requirements'][0]['required_level'], 4)
         schema = json.loads(mocked.call_args.args[0].data)['format']
+        first_payload = mocked.call_args.args[0].data
+        self.client.post('/api/skillradar/analyze/', payload, content_type='application/json')
+        self.assertEqual(mocked.call_args.args[0].data, first_payload)
+        self.assertIsInstance(json.loads(first_payload)['options']['seed'], int)
         self.assertIn('required_level', schema['$defs']['Requirement']['properties'])
         self.assertEqual(set(schema['$defs']['Requirement']['required']), set(schema['$defs']['Requirement']['properties']))
         bad = requirements()
@@ -99,7 +129,157 @@ class EvaluationPipelineTests(TestCase):
         self.assertEqual(self.client.post('/api/skillradar/analyze/', payload, content_type='application/json').status_code, 502)
 
 
+class ExtractionConsistencyTests(SimpleTestCase):
+    @patch('skillradar.analysis.request.urlopen')
+    def test_aliases_deduplicated_before_comparison_independent_of_response_order(self, mocked):
+        posting = '[우대사항]\nReact.js 경험\n## 주요 업무\nReact 개발\n**자격요건**\n리액트 활용\nTypeScript 활용'
+        items = [
+            {'name': 'React.js', 'importance': 'required', 'evidence': 'React.js 경험'},
+            {'name': ' react   개발 ', 'importance': 'preferred', 'evidence': 'React 개발'},
+            {'name': '리액트', 'importance': 'preferred', 'evidence': '리액트 활용'},
+            {'name': 'TS', 'importance': 'preferred', 'evidence': 'TypeScript 활용'},
+        ]
+        results = []
+        for ordered in (items, list(reversed(items))):
+            mocked.return_value.__enter__.return_value.read.return_value = json.dumps(
+                {'message': {'content': json.dumps({'requirements': ordered})}}).encode()
+            results.append([item.model_dump() for item in extract_requirements(RadarInput(job_posting=posting))])
+        self.assertEqual(results[0], results[1])
+        self.assertEqual([item['name'] for item in results[0]], ['React', 'TypeScript'])
+        self.assertEqual([item['importance'] for item in results[0]], ['required', 'required'])
+        self.assertEqual(results[0][0]['evidence'], '리액트 활용')
+        prompt = json.loads(mocked.call_args.args[0].data)['messages'][0]['content']
+        self.assertIn('required > unspecified > preferred', prompt)
+        self.assertIn('React.js'.casefold(), prompt)
+
+    @patch('skillradar.analysis.request.urlopen')
+    def test_general_requirement_precedes_preferred_and_keeps_distinct_skills(self, mocked):
+        posting = 'Preferred\nPython 경험\nResponsibilities\nPython 개발\nJava 및 JavaScript 개발\n문제 해결'
+        items = [
+            {'name': name, 'importance': 'preferred', 'evidence': evidence}
+            for name, evidence in [('PYTHON', 'Python 경험'), ('파이썬', 'Python 개발'),
+                                   ('Java', 'Java 및 JavaScript 개발'),
+                                   ('JS', 'Java 및 JavaScript 개발'), ('문제   해결', '문제 해결')]
+        ]
+        mocked.return_value.__enter__.return_value.read.return_value = json.dumps(
+            {'message': {'content': json.dumps({'requirements': items})}}).encode()
+        result = extract_requirements(RadarInput(job_posting=posting))
+        self.assertEqual([item.name for item in result], ['Python', 'Java', 'JavaScript', '문제 해결'])
+        self.assertEqual(result[0].importance, 'unspecified')
+        self.assertEqual(result[0].evidence, 'Python 개발')
+
+
 class CollectionTests(SimpleTestCase):
+    def link(self, url, title):
+        link = MagicMock()
+        link.get_attribute.return_value = url
+        link.text = title
+        return link
+
+    @patch('skillradar.collection.public_url', side_effect=lambda url: url)
+    @patch('skillradar.collection.browser')
+    def test_search_uses_discovered_corporate_and_linked_career_sources(self, mock_browser, valid_url):
+        for company, host in [('가상테크', 'fiction-tech.example'), ('다른기업', 'other-company.example')]:
+            with self.subTest(company=company):
+                driver = mock_browser.return_value.__enter__.return_value
+                driver.reset_mock()
+                driver.title = company + ' 공식 홈페이지'
+                driver.current_url = 'https://' + host + '/'
+                career = 'https://recruit.example/teams/' + host
+                official = 'https://careers.' + host + '/roles/1'
+                title = company + ' 플랫폼 개발자 직무소개'
+                driver.find_elements.side_effect = [
+                    [self.link(driver.current_url, company)],  # homepage search
+                    [object()],  # homepage body
+                    [self.link(career, 'Careers')],  # official referral to external service
+                    [self.link('https://board.example/jobs/1', title),
+                     self.link('https://' + host + '.evil.example/jobs/1', title),
+                     self.link('https://recruit.example/teams/unrelated/1', title),
+                     self.link(official, title), self.link(official + '#apply', title),
+                     self.link(career + '/roles/2', title),
+                     self.link('https://careers.' + host + '/roles/3', company + ' 영업 채용')],
+                ]
+                result = collect_posting(CollectionInput(company=company, division='플랫폼', role='개발자'))
+                self.assertEqual([item['url'] for item in result['candidates']], [official, career + '/roles/2'])
+                self.assertEqual(result['query'], company + ' 플랫폼 개발자 직무소개 채용')
+                self.assertEqual(result['kind'], 'candidates')
+                driver.execute_script.assert_not_called()
+
+    @patch('skillradar.collection.public_url', side_effect=lambda url: url)
+    @patch('skillradar.collection.browser')
+    def test_verified_candidate_can_be_collected_as_body(self, mock_browser, valid_url):
+        driver = mock_browser.return_value.__enter__.return_value
+        driver.title = '가상기업 개발자'
+        driver.current_url = 'https://fiction.example/'
+        url = 'https://fiction.example/jobs/1'
+        driver.find_elements.side_effect = [
+            [self.link(driver.current_url, '가상기업')], [object()], [],
+            [self.link(url, '가상기업 개발자 직무소개')],
+        ]
+        candidates = collect_posting(CollectionInput(company='가상기업', role='개발자'))
+        driver.find_elements.side_effect = None
+        driver.find_elements.return_value = [object()]
+        driver.current_url = url
+        driver.execute_script.return_value = '개발자 직무소개 및 요구 역량 본문 ' * 10
+        result = collect_posting(CollectionInput(url=candidates['candidates'][0]['url']))
+        self.assertEqual(result['source_url'], url)
+        self.assertIn('요구 역량', result['body'])
+
+    @patch('skillradar.collection.public_url', side_effect=lambda url: url)
+    @patch('skillradar.collection.browser')
+    def test_unconfirmed_company_identity_or_external_results_fail_closed(self, mock_browser, valid_url):
+        driver = mock_browser.return_value.__enter__.return_value
+        for title, matches in [('다른 회사', False), ('가상기업', True)]:
+            with self.subTest(title=title):
+                driver.title = title
+                driver.current_url = 'https://fiction.example/'
+                driver.find_elements.side_effect = [
+                    [self.link(driver.current_url, '가상기업')], [object()],
+                ] + ([[], [self.link('https://board.example/jobs/1', '가상기업 개발자 공식 채용')]] if matches else [])
+                with self.assertRaises(CollectionFailure):
+                    collect_posting(CollectionInput(company='가상기업', role='개발자'))
+
+    @patch('skillradar.collection.public_url')
+    def test_search_decodes_redirects_deduplicates_and_skips_unsafe_urls(self, valid_url):
+        driver = MagicMock()
+        driver.find_elements.return_value = [
+            self.link('https://duckduckgo.com/l/?uddg=https%3A%2F%2Ffiction.example%2Fjobs%2F1', '직무소개'),
+            self.link('https://fiction.example/jobs/1#apply', '직무소개'),
+            self.link('http://127.0.0.1/private', '직무소개'),
+        ]
+        def check(url):
+            if '127.0.0.1' in url:
+                raise ValueError('private')
+            return url
+        valid_url.side_effect = check
+        _, results = search_links(driver, '가상기업 개발자')
+        self.assertEqual(results, [{'title': '직무소개', 'url': 'https://fiction.example/jobs/1'}])
+
+    def test_source_matching_respects_hostname_and_external_tenant_boundaries(self):
+        self.assertTrue(source_matches('https://jobs.fiction.example/1', 'https://www.fiction.example/', True))
+        self.assertFalse(source_matches('https://fiction.example.evil.example/1', 'https://fiction.example/', True))
+        self.assertFalse(source_matches('https://evilfiction.example/1', 'https://fiction.example/', True))
+        self.assertFalse(source_matches('https://ats.example/team-other/1', 'https://ats.example/team'))
+        self.assertTrue(source_matches('https://ats.example/team/1', 'https://ats.example/team'))
+        self.assertFalse(source_matches('https://ats.example/jobs?company=other', 'https://ats.example/jobs?company=fiction'))
+        self.assertTrue(source_matches('https://ats.example/jobs/1?company=fiction', 'https://ats.example/jobs?company=fiction'))
+
+    @patch('skillradar.collection.public_url', side_effect=lambda url: url)
+    @patch('skillradar.collection.browser')
+    def test_localized_homepage_and_failed_homepage_candidate(self, mock_browser, valid_url):
+        driver = mock_browser.return_value.__enter__.return_value
+        driver.current_url = 'https://fiction.example/ko/kr/'
+        driver.title = '가상기업'
+        driver.get.side_effect = [None, TimeoutException('unavailable'), None, None]
+        driver.find_elements.side_effect = [
+            [self.link('https://unavailable.example/', '가상기업'),
+             self.link(driver.current_url, '가상기업')],
+            [object()], [],
+            [self.link('https://fiction.example/roles/1', '가상기업 개발자 직무소개')],
+        ]
+        result = collect_posting(CollectionInput(company='가상기업', role='개발자'))
+        self.assertEqual(result['candidates'][0]['url'], 'https://fiction.example/roles/1')
+
     def test_query_validation(self):
         for payload in [{}, {'company': '회사'}, {'url': 'x'*2001}]:
             with self.assertRaises(ValidationError):
@@ -140,20 +320,6 @@ class CollectionTests(SimpleTestCase):
         self.assertEqual(result['source_url'], driver.current_url)
         self.assertEqual(result['requested_url'], 'https://example.com/job')
         self.assertIn('collected_at', result)
-
-    @patch('skillradar.collection.public_url', side_effect=lambda url: url)
-    @patch('skillradar.collection.browser')
-    def test_search_query_returns_candidates_for_confirmation(self, mock_browser, valid_url):
-        driver = MagicMock()
-        mock_browser.return_value.__enter__.return_value = driver
-        link = MagicMock()
-        link.get_attribute.return_value = 'https://example.com/job'
-        link.text = '채용공고'
-        driver.find_elements.return_value = [link]
-        data = collect_posting(CollectionInput(company='회사', division='플랫폼', role='개발자'))
-        self.assertEqual(data['query'], '회사 플랫폼 개발자 채용 공고')
-        self.assertEqual(data['kind'], 'candidates')
-        self.assertEqual(data['candidates'][0]['url'], 'https://example.com/job')
 
     @patch('skillradar.views.collect_posting', side_effect=CollectionFailure('수집 실패'))
     def test_collection_failure_allows_manual_input(self, collect):

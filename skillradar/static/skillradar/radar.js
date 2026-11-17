@@ -70,20 +70,23 @@ function resetAnalysis() {
   el('to-assessment').hidden = true; el('analyze').hidden = true;
   resetEvaluation(); status('analysis-status', '');
 }
-function resetSearch() {
+function resetSearch(hideFallback = true) {
   if (state.busy) return;
   state.body = ''; state.source = ''; state.title = ''; state.statuses[0] = '진행 중';
   el('candidates').replaceChildren(); resetAnalysis(); status('collection-status', '');
+  if (hideFallback) {el('manual-options').hidden = true; el('manual-options').open = false;}
+  el('workflow-status').textContent = hideFallback ? '기업명과 직무명을 입력하고 직무정보를 검색하세요.' : 'URL 또는 본문을 입력해 분석을 계속하거나, 기업·직무를 바꿔 다시 검색하세요.';
 }
 document.querySelectorAll('[data-step]').forEach(button => {button.onclick = () => Number(button.dataset.step) === 3 ? openDiagnosis() : goStep(Number(button.dataset.step));});
-['company', 'division', 'role'].forEach(id => el(id).addEventListener('input', resetSearch));
-['posting', 'source-url', 'job-url'].forEach(id => el(id).addEventListener('input', resetSearch));
+['company', 'division', 'role'].forEach(id => el(id).addEventListener('input', () => resetSearch()));
+['posting', 'source-url', 'job-url'].forEach(id => el(id).addEventListener('input', () => resetSearch(false)));
 el('analysis-back').onclick = () => goStep(1);
 el('assessment-back').onclick = () => goStep(2);
 el('plan-back').onclick = () => goStep(3);
 el('to-assessment').onclick = () => openDiagnosis();
 
 function showPosting(data) {
+  el('manual-options').hidden = true; el('manual-options').open = false;
   state.body = data.body; state.source = data.source_url || ''; state.title = data.title || '직접 입력한 채용공고';
   state.statuses[0] = '완료';
   el('posting').value = state.body; el('source-url').value = state.source;
@@ -158,7 +161,7 @@ async function openDiagnosis() {
 el('retry-questions').onclick = () => openDiagnosis();
 async function analyzePosting() {
   resetAnalysis(); state.statuses[1] = '분석 중';
-  status('analysis-status', '공고에서 필요한 역량과 수준을 분석하고 있습니다…'); busy(true, '2 / 4 · 직무에 필요한 역량을 분석하고 있습니다.');
+  status('analysis-status', '공고에서 필요한 역량과 수준을 분석하고 있습니다. 잠시 기다려 주세요…', 'loading'); busy(true, '2 / 4 · 본문 준비 완료 · 직무에 필요한 역량을 분석하고 있습니다.');
   try {
     const data = await post('/api/skillradar/analyze/', {job_posting: state.body, source_url: state.source, current_skills: [], use_llm: true});
     if (!data.requirements.length) throw new Error('요구 역량을 찾지 못했습니다. 다른 공고를 선택하거나 본문을 확인해 주세요.');
@@ -173,8 +176,12 @@ async function analyzePosting() {
 }
 async function collect(payload) {
   if (state.busy) return;
-  resetSearch(); state.statuses[0] = '찾는 중'; busy(true, '1 / 4 · 채용공고를 찾고 있습니다.');
-  status('collection-status', '선택한 직무의 채용정보를 확인하고 있습니다…');
+  const collectingBody = !!payload.url;
+  resetSearch(!collectingBody); state.statuses[0] = collectingBody ? '본문 수집 중' : '검색 중';
+  const message = collectingBody ? '선택한 직무정보의 본문을 가져오고 있습니다…' : '기업·사업부·직무에 맞는 직무정보를 검색하고 있습니다…';
+  busy(true, `1 / 4 · ${message}`); status('collection-status', message, 'loading');
+  el('collect').textContent = collectingBody ? '본문 수집 중…' : '검색 중…';
+  el('collect-url').textContent = collectingBody ? '본문 수집 중…' : '이 URL로 분석하기';
   try {
     const data = await post('/api/skillradar/collect/', payload);
     el('candidates').replaceChildren();
@@ -185,18 +192,19 @@ async function collect(payload) {
         const card = document.createElement('article'); card.className = 'candidate';
         const text = document.createElement('div'); const title = document.createElement('h3'); title.textContent = item.title || '채용공고';
         const link = document.createElement('a'); link.textContent = url.hostname + ' · 원문 보기'; link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; text.append(title, link);
-        const choose = document.createElement('button'); choose.type = 'button'; choose.textContent = '이 공고로 분석'; choose.onclick = () => collect({url: url.href}); card.append(text, choose); el('candidates').append(card);
+        const choose = document.createElement('button'); choose.type = 'button'; choose.textContent = '선택하고 역량 분석'; choose.onclick = () => collect({url: url.href}); card.append(text, choose); el('candidates').append(card);
       });
-      state.statuses[0] = '공고 선택'; status('collection-status', `${el('candidates').children.length}개 검색 결과입니다. 기업·직무·마감일을 확인하고 분석할 공고를 선택하세요.`, 'success');
+      if (!el('candidates').children.length) throw new Error('열 수 있는 직무정보를 찾지 못했습니다.');
+      state.statuses[0] = '공고 선택'; status('collection-status', `${el('candidates').children.length}개 검색 결과입니다. 기업·사업부·직무와 원문 출처를 확인하세요. 직무소개는 현재 모집 여부나 마감일을 뜻하지 않습니다.`, 'success');
       el('workflow-status').textContent = '분석할 공고를 선택하면 수집과 직무 분석이 이어집니다.';
-    } else {
+    } else if (data.kind === 'posting' && typeof data.body === 'string' && data.body.trim()) {
       showPosting(data); status('collection-status', '공고를 수집했습니다.', 'success'); await analyzePosting();
-    }
+    } else {throw new Error('직무정보 본문을 가져오지 못했습니다.');}
   } catch (error) {
-    state.statuses[0] = '직접 입력 가능'; el('manual-options').open = true;
-    status('collection-status', '공고를 자동으로 가져오지 못했습니다. URL을 입력하거나 본문을 붙여 넣어 계속할 수 있습니다.', 'error');
+    state.statuses[0] = '재검색·직접 입력'; el('manual-options').hidden = false; el('manual-options').open = true;
+    status('collection-status', `${error.message} 입력값을 바꿔 다시 검색하거나 아래에 URL·본문을 입력해 계속하세요.`, 'error');
     el('workflow-status').textContent = '수집에 실패했습니다. 입력값을 바꿔 재검색하거나 직접 입력하세요.';
-  } finally {busy(false);}
+  } finally {busy(false); el('collect').textContent = '직무정보 검색'; el('collect-url').textContent = '이 URL로 분석하기';}
 }
 el('collect-form').onsubmit = event => {event.preventDefault(); collect({company: el('company').value, division: el('division').value, role: el('role').value});};
 el('url-form').onsubmit = event => {event.preventDefault(); collect({url: el('job-url').value});};

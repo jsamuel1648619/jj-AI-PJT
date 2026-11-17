@@ -26,6 +26,9 @@ def progress(rows):
 def serialize_roadmap(roadmap):
     rows = task_rows(roadmap)
     return {**roadmap.result, 'roadmap_id': str(roadmap.pk), 'configuration': roadmap.configuration,
+            'diagnosis_attempt_id': str(roadmap.attempt_id) if roadmap.attempt_id else None,
+            'diagnosis_skills': [{'name': item['name'], 'skill_id': item['skill_id']}
+                                 for item in roadmap.attempt.result['requirements']] if roadmap.attempt_id else [],
             'created_at': roadmap.created_at.isoformat(), 'tasks': rows, 'progress': progress(rows)}
 
 

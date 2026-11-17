@@ -26,12 +26,13 @@
 <section id="step-1" class="pane" aria-labelledby="heading-1">
 <h2 id="heading-1" tabindex="-1">어떤 직무로 성장하고 싶나요?</h2><p>기업명과 직무명만 입력하세요. 사업부를 알고 있다면 함께 적어 주세요.</p>
 <fieldset class="controls"><legend class="sr-only">채용정보 찾기</legend>
-<form id="collect-form">{% csrf_token %}<div class="grid"><label>기업명<input id="company" maxlength="100" required autocomplete="organization" placeholder="지원하고 싶은 기업"></label><label>사업부 <span class="optional">선택</span><input id="division" maxlength="100" placeholder="예: 플랫폼 사업부"></label><label>직무명<input id="role" maxlength="100" required placeholder="예: 백엔드 개발자"></label></div><button id="collect" type="submit">채용공고 찾기</button></form>
+<form id="collect-form">{% csrf_token %}<div class="grid"><label>기업명<input id="company" maxlength="100" required autocomplete="organization" placeholder="지원하고 싶은 기업"></label><label>사업부 <span class="optional">선택</span><input id="division" maxlength="100" placeholder="예: 플랫폼 사업부"></label><label>직무명<input id="role" maxlength="100" required placeholder="예: 백엔드 개발자"></label></div><button id="collect" type="submit">직무정보 검색</button><p class="hint">검색 결과를 선택하면 본문 수집과 역량 분석이 자동으로 이어집니다.</p></form>
+<p id="collection-status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
 <div id="candidates" aria-label="검색된 채용공고"></div>
-<details id="manual-options"><summary>공고 URL이 있거나 직접 입력하고 싶어요</summary><div class="fallback">
+<details id="manual-options" hidden><summary>검색·수집에 실패했나요? URL 또는 본문으로 계속하기</summary><div class="fallback">
 <form id="url-form"><label>채용공고 URL<input id="job-url" type="url" maxlength="2000" required placeholder="https://..."></label><button id="collect-url" type="submit" class="secondary">이 URL로 분석하기</button></form>
 <form id="manual-form"><label>채용공고 본문<textarea id="posting" rows="8" maxlength="30000" required placeholder="자동 수집이 어려운 경우 본문을 붙여 넣으세요."></textarea></label><label>출처 URL <span class="optional">선택</span><input id="source-url" type="url" maxlength="2000"></label><button id="manual-start" type="submit" class="secondary">입력한 공고 분석하기</button></form>
-</div></details><details><summary>이전 진단 결과 불러오기</summary><button id="load-history" type="button" class="secondary">저장된 진단 확인</button><div id="diagnosis-history"></div></details></fieldset><p id="collection-status" class="status" role="status" aria-live="polite"></p></section>
+</div></details><details><summary>이전 진단 결과 불러오기</summary><button id="load-history" type="button" class="secondary">저장된 진단 확인</button><div id="diagnosis-history"></div></details></fieldset></section>
 <section id="step-2" class="pane" aria-labelledby="heading-2" hidden>
 <h2 id="heading-2" tabindex="-1">이 직무에 필요한 역량입니다</h2><p id="job-context"></p><p id="provenance"></p>
 <details id="posting-details"><summary>수집된 공고와 출처 확인</summary><a id="source-link" target="_blank" rel="noopener noreferrer" hidden>공고 원문 열기</a><pre id="posting-preview"></pre></details>
